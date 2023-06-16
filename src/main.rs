@@ -1,11 +1,61 @@
 use rand::{distributions::Uniform, prelude::Distribution};
 use std::f32::consts::PI;
+use std::fs::File;
+use std::io::prelude::*;
 
+const MAGIC_BIT_PATTERN: u32 = 0x1234;
+
+struct SimParams {
+    tick_count: usize,
+    dump_skip_size: usize,
+    particle_count: usize,
+    world_width: f32,
+    world_height: f32,
+    alpha: f32,
+    beta: f32,
+    r: f32,
+    v: f32,
+    file_name: String,
+}
+
+impl SimParams {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        // These aren't the same size so I can't use [u8; N]::concat()
+        bytes.extend(self.tick_count.to_le_bytes());
+        bytes.extend(self.particle_count.to_le_bytes());
+        bytes.extend(self.world_width.to_le_bytes());
+        bytes.extend(self.world_height.to_le_bytes());
+        bytes.extend(self.dump_skip_size.to_le_bytes());
+        bytes.extend(MAGIC_BIT_PATTERN.to_le_bytes());
+        bytes
+    }
+}
+
+#[repr(C)]
 struct Particle {
     x: f32,
     y: f32,
     heading: f32,
     neighbours: i32,
+}
+
+impl Particle {
+    fn encode(&self) -> Vec<u8> {
+        [
+            self.x.to_le_bytes(),
+            self.y.to_le_bytes(),
+            self.heading.to_le_bytes(),
+            self.neighbours.to_le_bytes(),
+        ]
+        .concat()
+    }
+}
+
+#[derive(Clone)]
+struct SideNeighbourCount {
+    left: i32,
+    right: i32,
 }
 
 /// Approximates wrapping x within [0, max].
@@ -28,23 +78,29 @@ fn is_on_left(delta_x: f32, delta_y: f32, selected_heading: f32) -> bool {
     delta_x * s + delta_y * c >= 0.0
 }
 
-fn main() {
-    let tick_count: usize = 100;
-    let particle_count: usize = 1000;
-    let world_width: f32 = 100.0;
-    let world_height: f32 = 100.0;
+fn main() -> std::io::Result<()> {
+    let params = SimParams {
+        tick_count: 100,
+        dump_skip_size: 1,
+        particle_count: 1000,
+        world_width: 100.0,
+        world_height: 100.0,
+        alpha: f32::to_radians(180.0),
+        beta: f32::to_radians(70.0),
+        r: 5.0,
+        v: 0.67,
+        file_name: "test.dump".to_string(),
+    };
 
-    let sim_alpha: f32 = f32::to_radians(180.0);
-    let sim_beta: f32 = f32::to_radians(17.0);
-    let sim_r: f32 = 5.0;
-    let sim_v: f32 = 0.67;
+    let mut dump_file = File::create(params.file_name.clone())?;
+    dump_file.write_all(&params.encode())?;
 
     let mut rng = rand::thread_rng();
-    let x_distribution = Uniform::new(0.0, world_width);
-    let y_distribution = Uniform::new(0.0, world_height);
+    let x_distribution = Uniform::new(0.0, params.world_width);
+    let y_distribution = Uniform::new(0.0, params.world_height);
     let heading_distribution = Uniform::new_inclusive(0.0, 2.0 * PI);
 
-    let mut particles: Vec<Particle> = (0..particle_count)
+    let mut particles: Vec<Particle> = (0..params.particle_count)
         .map(|_| Particle {
             x: x_distribution.sample(&mut rng),
             y: y_distribution.sample(&mut rng),
@@ -53,40 +109,51 @@ fn main() {
         })
         .collect();
 
-    for tick in 0..tick_count {
-        // Calculate changes in heading
-        let mut delta_headings = vec![0.0f32; particle_count];
-        for i in 0..particle_count {
-            let selected = &particles[i];
-            let mut left: i32 = 0;
-            let mut right: i32 = 0;
-            for j in 0..particle_count {
-                if j == i {
-                    continue;
-                }
-                let current = &particles[j];
-                let delta_x = wrap(current.x - selected.x, world_width);
-                let delta_y = wrap(current.y - selected.y, world_height);
-                if within_radius(delta_x, delta_y, sim_r) {
+    for tick in 0..params.tick_count {
+        // Calculate neighbours on left and right
+        let mut left_right_neighbours =
+            vec![SideNeighbourCount { left: 0, right: 0 }; params.particle_count];
+        for (i, (selected, SideNeighbourCount { left, right })) in
+            std::iter::zip(&particles, &mut left_right_neighbours).enumerate()
+        {
+            for current in particles[..i].iter().chain(&particles[i + 1..]) {
+                let delta_x = wrap(current.x - selected.x, params.world_width);
+                let delta_y = wrap(current.y - selected.y, params.world_height);
+                if within_radius(delta_x, delta_y, params.r) {
                     if is_on_left(delta_x, delta_y, selected.heading) {
-                        left += 1;
+                        *left += 1;
                     } else {
-                        right += 1;
+                        *right += 1;
                     }
                 }
             }
-            let neighbours = left + right;
-            particles[i].neighbours = neighbours;
-            delta_headings[i] =
-                sim_alpha + sim_beta * (neighbours * i32::signum(right - left)) as f32;
         }
 
         // Update particle data
-        for (mut p, delta_heading) in std::iter::zip(&mut particles, &delta_headings) {
+        for (p, SideNeighbourCount { left, right }) in
+            std::iter::zip(&mut particles, &left_right_neighbours)
+        {
+            let neighbours = left + right;
+            p.neighbours = neighbours;
+            let delta_heading =
+                params.alpha + params.beta * (neighbours * i32::signum(right - left)) as f32;
             p.heading = (p.heading + delta_heading) % (2.0 * PI);
             let (s, c) = f32::sin_cos(p.heading);
-            p.x = wrap(p.x + sim_v * c, world_width);
-            p.y = wrap(p.y + sim_v * s, world_height);
+            p.x = wrap(p.x + params.v * c, params.world_width);
+            p.y = wrap(p.y + params.v * s, params.world_height);
+        }
+
+        // Write to file
+        if tick % params.dump_skip_size == 0 {
+            dump_file.write_all(
+                particles
+                    .iter()
+                    .flat_map(|p| p.encode())
+                    .collect::<Vec<u8>>()
+                    .as_slice(),
+            )?;
         }
     }
+
+    Ok(())
 }
