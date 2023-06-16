@@ -3,7 +3,7 @@ use std::f32::consts::PI;
 use std::fs::File;
 use std::io::prelude::*;
 
-const MAGIC_BIT_PATTERN: u32 = 0x1234;
+const MAGIC_BIT_PATTERN: u64 = 0x1234;
 
 struct SimParams {
     tick_count: usize,
@@ -32,30 +32,31 @@ impl SimParams {
     }
 }
 
-#[repr(C)]
 struct Particle {
     x: f32,
     y: f32,
     heading: f32,
-    neighbours: i32,
+    neighbours: u8,
 }
 
 impl Particle {
     fn encode(&self) -> Vec<u8> {
-        [
-            self.x.to_le_bytes(),
-            self.y.to_le_bytes(),
-            self.heading.to_le_bytes(),
-            self.neighbours.to_le_bytes(),
-        ]
-        .concat()
+        let mut bytes = Vec::new();
+        bytes.extend(self.x.to_le_bytes());
+        bytes.extend(self.y.to_le_bytes());
+        bytes.extend(self.heading.to_le_bytes());
+        // 24-bit id field unused
+        bytes.extend([0u8, 0u8, 0u8]);
+        // 8-bit neighbour count
+        bytes.extend(self.neighbours.to_le_bytes());
+        bytes
     }
 }
 
 #[derive(Clone)]
 struct SideNeighbourCount {
-    left: i32,
-    right: i32,
+    left: u8,
+    right: u8,
 }
 
 /// Approximates wrapping x within [0, max].
@@ -109,7 +110,18 @@ fn main() -> std::io::Result<()> {
         })
         .collect();
 
-    for tick in 0..params.tick_count {
+    for tick in 0..=params.tick_count {
+        // Write to file
+        if tick % params.dump_skip_size == 0 {
+            dump_file.write_all(
+                particles
+                    .iter()
+                    .flat_map(|p| p.encode())
+                    .collect::<Vec<u8>>()
+                    .as_slice(),
+            )?;
+        }
+
         // Calculate neighbours on left and right
         let mut left_right_neighbours =
             vec![SideNeighbourCount { left: 0, right: 0 }; params.particle_count];
@@ -135,23 +147,13 @@ fn main() -> std::io::Result<()> {
         {
             let neighbours = left + right;
             p.neighbours = neighbours;
-            let delta_heading =
-                params.alpha + params.beta * (neighbours * i32::signum(right - left)) as f32;
+            let delta_heading = params.alpha
+                + params.beta
+                    * (neighbours as i8 * i8::signum((*right as i8) - (*left as i8))) as f32;
             p.heading = (p.heading + delta_heading) % (2.0 * PI);
             let (s, c) = f32::sin_cos(p.heading);
             p.x = wrap(p.x + params.v * c, params.world_width);
             p.y = wrap(p.y + params.v * s, params.world_height);
-        }
-
-        // Write to file
-        if tick % params.dump_skip_size == 0 {
-            dump_file.write_all(
-                particles
-                    .iter()
-                    .flat_map(|p| p.encode())
-                    .collect::<Vec<u8>>()
-                    .as_slice(),
-            )?;
         }
     }
 
