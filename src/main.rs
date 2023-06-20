@@ -1,5 +1,4 @@
 use rand::{distributions::Uniform, prelude::Distribution};
-use std::f32::consts::PI;
 use std::fs::File;
 use std::io::prelude::*;
 
@@ -53,6 +52,25 @@ impl Particle {
     }
 }
 
+struct RectDistribution {
+    width: f32,
+    height: f32
+}
+
+impl Distribution<Particle> for RectDistribution {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Particle {
+        let x_distribution = Uniform::new(0.0, self.width);
+        let y_distribution = Uniform::new(0.0, self.height);
+        let heading_distribution = Uniform::new_inclusive(0.0, 2.0 * std::f32::consts::PI);
+        Particle {
+            x: x_distribution.sample(rng),
+            y: y_distribution.sample(rng),
+            heading: heading_distribution.sample(rng),
+            neighbours: 0
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SideNeighbourCount {
     left: u8,
@@ -79,6 +97,69 @@ fn is_on_left(delta_x: f32, delta_y: f32, selected_heading: f32) -> bool {
     delta_x * s + delta_y * c >= 0.0
 }
 
+struct SerialSimulation {
+    world_width: f32,
+    world_height: f32,
+    alpha: f32,
+    beta: f32,
+    r: f32,
+    v: f32,
+    particles: Vec<Particle>
+}
+
+impl SerialSimulation {
+    fn dump_to_file(&self, file: &mut File) -> std::io::Result<()> {
+        file.write_all(
+            self.particles
+                .iter()
+                .flat_map(Particle::encode)
+                .collect::<Vec<u8>>()
+                .as_slice(),
+        )
+    }
+
+    fn calculate_neighbours(&self) -> Vec<SideNeighbourCount> {
+        let mut left_right_neighbours =
+            vec![SideNeighbourCount { left: 0, right: 0 }; self.particles.len()];
+        for (i, (selected, SideNeighbourCount { left, right })) in
+            std::iter::zip(&self.particles, &mut left_right_neighbours).enumerate()
+        {
+            for current in self.particles[..i].iter().chain(&self.particles[i + 1..]) {
+                let delta_x = wrap(current.x - selected.x, self.world_width);
+                let delta_y = wrap(current.y - selected.y, self.world_height);
+                if within_radius(delta_x, delta_y, self.r) {
+                    if is_on_left(delta_x, delta_y, selected.heading) {
+                        *left += 1;
+                    } else {
+                        *right += 1;
+                    }
+                }
+            }
+        }
+        left_right_neighbours
+    }
+
+    fn update_particle_data(&mut self, left_right_neighbours: Vec<SideNeighbourCount>) {
+        for (p, SideNeighbourCount { left, right }) in
+            std::iter::zip(&mut self.particles, &left_right_neighbours)
+        {
+            let neighbours = left + right;
+            p.neighbours = neighbours;
+            let delta_heading = self.alpha
+                + self.beta
+                    * (neighbours as i8 * i8::signum((*right as i8) - (*left as i8))) as f32;
+            p.heading = (p.heading + delta_heading) % (2.0 * std::f32::consts::PI);
+            let (s, c) = f32::sin_cos(p.heading);
+            p.x = wrap(p.x + self.v * c, self.world_width);
+            p.y = wrap(p.y + self.v * s, self.world_height);
+        }
+    }
+
+    fn tick(&mut self) {
+        self.update_particle_data(self.calculate_neighbours());
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let params = SimParams {
         tick_count: 100,
@@ -97,64 +178,24 @@ fn main() -> std::io::Result<()> {
     dump_file.write_all(&params.encode())?;
 
     let mut rng = rand::thread_rng();
-    let x_distribution = Uniform::new(0.0, params.world_width);
-    let y_distribution = Uniform::new(0.0, params.world_height);
-    let heading_distribution = Uniform::new_inclusive(0.0, 2.0 * PI);
+    let dist = RectDistribution {width: params.world_width, height: params.world_height};
+    let particles: Vec<Particle> = (0..params.particle_count).map(|_| dist.sample(&mut rng)).collect();
 
-    let mut particles: Vec<Particle> = (0..params.particle_count)
-        .map(|_| Particle {
-            x: x_distribution.sample(&mut rng),
-            y: y_distribution.sample(&mut rng),
-            heading: heading_distribution.sample(&mut rng),
-            neighbours: 0,
-        })
-        .collect();
+    let mut sim = SerialSimulation {
+        world_width: params.world_width,
+        world_height: params.world_height,
+        alpha: params.alpha,
+        beta: params.beta,
+        r: params.r,
+        v: params.v,
+        particles
+    };
 
     for tick in 0..=params.tick_count {
-        // Write to file
         if tick % params.dump_skip_size == 0 {
-            dump_file.write_all(
-                particles
-                    .iter()
-                    .flat_map(|p| p.encode())
-                    .collect::<Vec<u8>>()
-                    .as_slice(),
-            )?;
+            sim.dump_to_file(&mut dump_file)?
         }
-
-        // Calculate neighbours on left and right
-        let mut left_right_neighbours =
-            vec![SideNeighbourCount { left: 0, right: 0 }; params.particle_count];
-        for (i, (selected, SideNeighbourCount { left, right })) in
-            std::iter::zip(&particles, &mut left_right_neighbours).enumerate()
-        {
-            for current in particles[..i].iter().chain(&particles[i + 1..]) {
-                let delta_x = wrap(current.x - selected.x, params.world_width);
-                let delta_y = wrap(current.y - selected.y, params.world_height);
-                if within_radius(delta_x, delta_y, params.r) {
-                    if is_on_left(delta_x, delta_y, selected.heading) {
-                        *left += 1;
-                    } else {
-                        *right += 1;
-                    }
-                }
-            }
-        }
-
-        // Update particle data
-        for (p, SideNeighbourCount { left, right }) in
-            std::iter::zip(&mut particles, &left_right_neighbours)
-        {
-            let neighbours = left + right;
-            p.neighbours = neighbours;
-            let delta_heading = params.alpha
-                + params.beta
-                    * (neighbours as i8 * i8::signum((*right as i8) - (*left as i8))) as f32;
-            p.heading = (p.heading + delta_heading) % (2.0 * PI);
-            let (s, c) = f32::sin_cos(p.heading);
-            p.x = wrap(p.x + params.v * c, params.world_width);
-            p.y = wrap(p.y + params.v * s, params.world_height);
-        }
+        sim.tick();
     }
 
     Ok(())
