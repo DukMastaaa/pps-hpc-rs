@@ -14,7 +14,7 @@ pub struct SerialSimulation {
 
 impl SerialSimulation {
     pub fn new(params: sim::CommonParams, particles: Vec<sim::Particle>) -> Self {
-        SerialSimulation { params, particles }
+        Self { params, particles }
     }
 
     fn calculate_neighbours(&self) -> Vec<SideNeighbourCount> {
