@@ -1,5 +1,15 @@
 use rand::{distributions::Uniform, prelude::Distribution};
 
+#[derive(Clone, Copy)]
+pub struct CommonParams {
+    pub world_width: f32,
+    pub world_height: f32,
+    pub alpha: f32,
+    pub beta: f32,
+    pub r: f32,
+    pub v: f32,
+}
+
 pub struct Particle {
     pub x: f32,
     pub y: f32,
