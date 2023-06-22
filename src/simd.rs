@@ -8,20 +8,18 @@ pub struct SIMDSimulation {
 }
 
 macro_rules! panic_if_x86_features_not_detected {
-    ($feature:tt) => {
-        if !is_x86_feature_detected!($feature) {
-            panic!(concat!($feature, " feature not detected!"));
-        }
+    // thank you @paelias.2702
+    ( $( $feature:tt ),* ) => {
+        $(
+            if !is_x86_feature_detected!($feature) {
+                panic!(concat!($feature, " feature not detected!"));
+            }
+        )*
     };
-    ($feature:tt $(, $features:tt)*) => {{
-        panic_if_x86_features_not_detected!($feature);
-        panic_if_x86_features_not_detected!($($features),*);
-    }}
 }
 
 impl SIMDSimulation {
     fn check_x86_features_detected() {
-        // panic_if_x86_features_not_detected!("avx2");
         panic_if_x86_features_not_detected!("avx2", "fma", "bmi2");
     }
 
