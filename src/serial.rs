@@ -1,72 +1,130 @@
 use crate::sim;
 use std::{fs::File, io::Write};
 
+struct Particle {
+    x: f32,
+    y: f32,
+    heading: f32,
+    neighbours: u8,
+}
+
+impl Particle {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(self.x.to_le_bytes());
+        bytes.extend(self.y.to_le_bytes());
+        bytes.extend(self.heading.to_le_bytes());
+        // 24-bit id field unused
+        bytes.extend([0u8, 0u8, 0u8]);
+        // 8-bit neighbour count
+        bytes.extend(self.neighbours.to_le_bytes());
+        bytes
+    }
+}
+
+impl From<sim::GenericParticle> for Particle {
+    fn from(value: sim::GenericParticle) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            heading: value.heading,
+            neighbours: 0,
+        }
+    }
+}
+
+pub struct SpecificParams {}
+
+pub struct SerialSimulation {
+    common: sim::CommonParams,
+    #[allow(dead_code)]
+    specific: SpecificParams,
+    particles: Vec<Particle>,
+}
+
 #[derive(Clone)]
 struct SideNeighbourCount {
     left: u8,
     right: u8,
 }
 
-pub struct SerialSimulation {
-    params: sim::CommonParams,
-    particles: Vec<sim::Particle>,
-}
-
 impl SerialSimulation {
-    pub fn new(params: sim::CommonParams, particles: Vec<sim::Particle>) -> Self {
-        Self { params, particles }
+    pub fn new(
+        common: sim::CommonParams,
+        specific: SpecificParams,
+        particles: Vec<sim::GenericParticle>,
+    ) -> Self {
+        Self {
+            common,
+            specific,
+            particles: particles.into_iter().map(Particle::from).collect(),
+        }
     }
 
-    fn calculate_neighbours(&self) -> Vec<SideNeighbourCount> {
-        let mut left_right_neighbours =
-            vec![SideNeighbourCount { left: 0, right: 0 }; self.particles.len()];
-        for (i, (selected, SideNeighbourCount { left, right })) in
-            std::iter::zip(&self.particles, &mut left_right_neighbours).enumerate()
+    /// Calculates the number of neighbours on the left and right of the
+    /// particle at the specified index.
+    fn calculate_neighbours(
+        common: &sim::CommonParams,
+        particles: &Vec<Particle>,
+        particle_idx: usize,
+    ) -> SideNeighbourCount {
+        let mut left = 0;
+        let mut right = 0;
+        let selected = &particles[particle_idx];
+        for (i, current) in particles.into_iter().enumerate()
         {
-            for current in self.particles[..i].iter().chain(&self.particles[i + 1..]) {
-                let delta_x = sim::wrap(current.x - selected.x, self.params.world_width);
-                let delta_y = sim::wrap(current.y - selected.y, self.params.world_height);
-                if sim::within_radius(delta_x, delta_y, self.params.r) {
-                    if sim::is_on_left(delta_x, delta_y, selected.heading) {
-                        *left += 1;
-                    } else {
-                        *right += 1;
-                    }
+            if i == particle_idx {
+                continue;
+            }
+            let delta_x = sim::wrap(current.x - selected.x, common.world_width);
+            let delta_y = sim::wrap(current.y - selected.y, common.world_height);
+            if sim::within_radius(delta_x, delta_y, common.r) {
+                if sim::is_on_left(delta_x, delta_y, selected.heading) {
+                    left += 1;
+                } else {
+                    right += 1;
                 }
             }
         }
-        left_right_neighbours
+        SideNeighbourCount { left, right }
     }
 
-    fn update_particle_data(&mut self, left_right_neighbours: Vec<SideNeighbourCount>) {
-        for (p, SideNeighbourCount { left, right }) in
-            std::iter::zip(&mut self.particles, &left_right_neighbours)
-        {
-            let neighbours = left + right;
-            p.neighbours = neighbours;
-            let delta_heading = self.params.alpha
-                + self.params.beta
-                    * (neighbours as i8 * i8::signum((*right as i8) - (*left as i8))) as f32;
-            p.heading = (p.heading + delta_heading) % (2.0 * std::f32::consts::PI);
-            let (s, c) = f32::sin_cos(p.heading);
-            p.x = sim::wrap(p.x + self.params.v * c, self.params.world_width);
-            p.y = sim::wrap(p.y + self.params.v * s, self.params.world_height);
-        }
+    /// Updates a particle's fields given how many neighbours it has.
+    fn update_particle_data(
+        common: &sim::CommonParams,
+        p: &mut Particle,
+        neighbours: &SideNeighbourCount,
+    ) {
+        let total = neighbours.left + neighbours.right;
+        p.neighbours = total;
+        let delta_heading = common.alpha
+            + common.beta
+                * (total as i8 * i8::signum((neighbours.right as i8) - (neighbours.left as i8)))
+                    as f32;
+        p.heading = (p.heading + delta_heading) % (2.0 * std::f32::consts::PI);
+        let (s, c) = f32::sin_cos(p.heading);
+        p.x = sim::wrap(p.x + common.v * c, common.world_width);
+        p.y = sim::wrap(p.y + common.v * s, common.world_height);
     }
 }
 
-impl sim::Simulation for SerialSimulation {
+impl sim::Simulate for SerialSimulation {
     fn dump_to_file(&self, file: &mut File) -> std::io::Result<()> {
         file.write_all(
             self.particles
                 .iter()
-                .flat_map(sim::Particle::encode)
+                .flat_map(Particle::encode)
                 .collect::<Vec<u8>>()
                 .as_slice(),
         )
     }
 
     fn tick(&mut self) {
-        self.update_particle_data(self.calculate_neighbours());
+        let left_right_neighbours: Vec<SideNeighbourCount> = (0..self.particles.len())
+            .map(|i| Self::calculate_neighbours(&self.common, &self.particles, i))
+            .collect();
+        for (p, neighbours) in std::iter::zip(&mut self.particles, &left_right_neighbours) {
+            Self::update_particle_data(&self.common, p, neighbours);
+        }
     }
 }

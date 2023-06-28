@@ -51,17 +51,18 @@ fn main() -> std::io::Result<()> {
     let mut dump_file = File::create(cli.file_name.clone())?;
     dump_file.write_all(&cli.encode())?;
 
-    let mut rng = rand::thread_rng();
+    let rng = rand::thread_rng();
     let dist = sim::RectDistribution {
         width: cli.common.world_width,
         height: cli.common.world_height,
     };
-    let particles: Vec<sim::Particle> = (0..cli.particle_count)
-        .map(|_| dist.sample(&mut rng))
-        .collect();
+    let particles = dist.sample_iter(rng).take(cli.particle_count).collect();
 
-    let mut sim: Box<dyn sim::Simulation> =
-        Box::new(serial::SerialSimulation::new(cli.common, particles));
+    let mut sim: Box<dyn sim::Simulate> = Box::new(serial::SerialSimulation::new(
+        common,
+        serial::SpecificParams {},
+        particles,
+    ));
 
     for tick in 0..=cli.tick_count {
         if tick % cli.dump_skip_size == 0 {

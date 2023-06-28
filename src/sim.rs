@@ -1,5 +1,7 @@
 use rand::{distributions::Uniform, prelude::Distribution};
 
+// Generic simulation elements
+
 #[derive(Clone, Copy)]
 pub struct CommonParams {
     pub world_width: f32,
@@ -10,26 +12,18 @@ pub struct CommonParams {
     pub v: f32,
 }
 
-pub struct Particle {
+pub struct GenericParticle {
     pub x: f32,
     pub y: f32,
     pub heading: f32,
-    pub neighbours: u8,
 }
 
-impl Particle {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.x.to_le_bytes());
-        bytes.extend(self.y.to_le_bytes());
-        bytes.extend(self.heading.to_le_bytes());
-        // 24-bit id field unused
-        bytes.extend([0u8, 0u8, 0u8]);
-        // 8-bit neighbour count
-        bytes.extend(self.neighbours.to_le_bytes());
-        bytes
-    }
+pub trait Simulate {
+    fn dump_to_file(&self, file: &mut std::fs::File) -> std::io::Result<()>;
+    fn tick(&mut self);
 }
+
+// Helper functions
 
 /// Approximates wrapping x within [0, max].
 pub fn wrap(x: f32, max: f32) -> f32 {
@@ -58,21 +52,15 @@ pub struct RectDistribution {
     pub height: f32,
 }
 
-impl Distribution<Particle> for RectDistribution {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Particle {
+impl Distribution<GenericParticle> for RectDistribution {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> GenericParticle {
         let x_distribution = Uniform::new(0.0, self.width);
         let y_distribution = Uniform::new(0.0, self.height);
         let heading_distribution = Uniform::new_inclusive(0.0, 2.0 * std::f32::consts::PI);
-        Particle {
+        GenericParticle {
             x: x_distribution.sample(rng),
             y: y_distribution.sample(rng),
             heading: heading_distribution.sample(rng),
-            neighbours: 0,
         }
     }
-}
-
-pub trait Simulation {
-    fn dump_to_file(&self, file: &mut std::fs::File) -> std::io::Result<()>;
-    fn tick(&mut self);
 }
