@@ -1,3 +1,8 @@
+#![warn(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::missing_safety_doc)]
+// #![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(clippy::multiple_unsafe_ops_per_block)]
+
 mod serial;
 mod sim;
 mod simd;
