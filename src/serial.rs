@@ -42,12 +42,6 @@ pub struct SerialSimulation {
     particles: Vec<Particle>,
 }
 
-#[derive(Clone)]
-struct SideNeighbourCount {
-    left: u8,
-    right: u8,
-}
-
 impl SerialSimulation {
     pub fn new(
         common: sim::CommonParams,
@@ -67,12 +61,11 @@ impl SerialSimulation {
         common: &sim::CommonParams,
         particles: &Vec<Particle>,
         particle_idx: usize,
-    ) -> SideNeighbourCount {
+    ) -> sim::SideNeighbourCount {
         let mut left = 0;
         let mut right = 0;
         let selected = &particles[particle_idx];
-        for (i, current) in particles.into_iter().enumerate()
-        {
+        for (i, current) in particles.into_iter().enumerate() {
             if i == particle_idx {
                 continue;
             }
@@ -86,14 +79,14 @@ impl SerialSimulation {
                 }
             }
         }
-        SideNeighbourCount { left, right }
+        sim::SideNeighbourCount { left, right }
     }
 
     /// Updates a particle's fields given how many neighbours it has.
     fn update_particle_data(
         common: &sim::CommonParams,
         p: &mut Particle,
-        neighbours: &SideNeighbourCount,
+        neighbours: &sim::SideNeighbourCount,
     ) {
         let total = neighbours.left + neighbours.right;
         p.neighbours = total;
@@ -120,7 +113,7 @@ impl sim::Simulate for SerialSimulation {
     }
 
     fn tick(&mut self) {
-        let left_right_neighbours: Vec<SideNeighbourCount> = (0..self.particles.len())
+        let left_right_neighbours: Vec<sim::SideNeighbourCount> = (0..self.particles.len())
             .map(|i| Self::calculate_neighbours(&self.common, &self.particles, i))
             .collect();
         for (p, neighbours) in std::iter::zip(&mut self.particles, &left_right_neighbours) {

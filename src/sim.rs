@@ -25,6 +25,13 @@ pub trait Simulate {
 
 // Helper functions
 
+/// Helper struct to store left and right neighbour counts of a particle.
+#[derive(Clone)]
+pub struct SideNeighbourCount {
+    pub left: u8,
+    pub right: u8,
+}
+
 /// Approximates wrapping x within [0, max].
 pub fn wrap(x: f32, max: f32) -> f32 {
     if x > max {
